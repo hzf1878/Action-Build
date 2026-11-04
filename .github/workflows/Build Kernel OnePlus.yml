@@ -98,6 +98,18 @@ on:
         description: "自定义构建时间(输入F使用UTCT或-1关闭)//Custom build time (Enter F to use UTCT, or -1 to disable)"
         required: false
         default: "Wed Jul 15 11:18:49 UTC 2026"
+      KSU_FLAVOR:
+        description: "Root 方案(默认 SukiSU-Ultra)//Root flavor (default: SukiSU-Ultra)"
+        required: true
+        default: "SukiSU-Ultra"
+        options:
+          - SukiSU-Ultra
+          - FinaSU
+      SUSFS_INLINE:
+        type: boolean
+        description: "仅 FinaSU 生效：使用 ARM64 Built-In SUSFS Inline 后端代替 Tracepoint //FinaSU only: use ARM64 Built-In SUSFS Inline instead of Tracepoint"
+        required: false
+        default: false
       KSU_META:
         type: string
         description: "管理器分支名(必填)/内置分支名(必填)/自定义版本标识(留空不修改)/回退分支提交哈希版本(留空不修改)//Manager Branch name (Required) / Builtin branch name (Required) / Custom version identifier (Leave blank to not modify) / Rollback branch commit hash version (Leave blank to not modify)"
@@ -679,10 +691,13 @@ jobs:
             chmod +x "$f"
           done
 
-      - name: Add SukiSU Ultra
+      - name: Add ${{ github.event.inputs.KSU_FLAVOR }} Kernel Module
         run: |
           cd kernel_workspace/kernel_platform
           KSU_META="${{ github.event.inputs.KSU_META }}"
+          KSU_FLAVOR="${{ github.event.inputs.KSU_FLAVOR }}"
+          [[ -n "$KSU_FLAVOR" ]] || KSU_FLAVOR="SukiSU-Ultra"
+          echo "KSU_FLAVOR=$KSU_FLAVOR" >> $GITHUB_ENV
 
           # 必须包含两个分隔符（至少四个字段）
           if [[ "$(grep -o '/' <<< "$KSU_META" | wc -l)" -lt 3 ]]; then
@@ -697,8 +712,16 @@ jobs:
           [[ -n "$KSU_CUSTOM_TAG" ]] && echo "自定义版本标识: $KSU_CUSTOM_TAG" || echo "自定义版本标识: 未启用"
           [[ -n "$MANUAL_HASH" ]] && echo "手动指定 hash: $MANUAL_HASH" || echo "手动指定 hash: 未启用"
 
-          curl -LSs "https://raw.githubusercontent.com/SukiSU-Ultra/SukiSU-Ultra/${KSU_MANAGER_BRANCH}/kernel/setup.sh" | bash -s "$KSU_BUILTIN_BRANCH"
-          cd ./KernelSU
+          if [[ "$KSU_FLAVOR" == "FinaSU" ]]; then
+            echo "正在集成 FinaSU (LyraVoid/FinaSU)"
+            # FinaSU 的 kernel/setup.sh 与 SukiSU 参数兼容，但克隆到 ./FinaSU（非 ./KernelSU）
+            curl -LSsf "https://raw.githubusercontent.com/LyraVoid/FinaSU/${KSU_MANAGER_BRANCH}/kernel/setup.sh" -o finasu_setup.sh
+            bash finasu_setup.sh "$KSU_BUILTIN_BRANCH"
+            cd ./FinaSU
+          else
+            curl -LSs "https://raw.githubusercontent.com/SukiSU-Ultra/SukiSU-Ultra/${KSU_MANAGER_BRANCH}/kernel/setup.sh" | bash -s "$KSU_BUILTIN_BRANCH"
+            cd ./KernelSU
+          fi
 
           # 如果指定了手动 hash，就切换到该提交
           if [[ -n "$MANUAL_HASH" ]]; then
@@ -707,12 +730,20 @@ jobs:
             SHORT_HASH=${MANUAL_HASH:0:8}
           fi
 
-          KSU_VERSION_TAG=$(curl -fsSL https://api.github.com/repos/SukiSU-Ultra/SukiSU-Ultra/releases/latest \
-            | grep '"tag_name":' | sed -E 's/.*"v?([^"]+)".*/\1/')
-          if [[ -z "$KSU_VERSION_TAG" || "$(printf '%s\n' "$KSU_VERSION_TAG" "3.1.7" | sort -V | head -n1)" != "3.1.7" ]]; then
-            KSU_VERSION_TAG="3.1.7"
+          if [[ "$KSU_FLAVOR" == "FinaSU" ]]; then
+            # FinaSU 不在 kernel/Makefile 里维护 KSU_VERSION_API，改为读取公开版本或回退
+            KSU_VERSION_TAG=$(curl -fsSL "https://api.github.com/repos/LyraVoid/FinaSU/releases/latest" 2>/dev/null \
+              | grep '"tag_name":' | sed -E 's/.*"v?([^"]+)".*/\1/') || true
+            KSU_VERSION_TAG="${KSU_VERSION_TAG:-0.1.0}"
+            echo "KSU_VERSION_TAG=$KSU_VERSION_TAG" >> $GITHUB_ENV
+          else
+            KSU_VERSION_TAG=$(curl -fsSL https://api.github.com/repos/SukiSU-Ultra/SukiSU-Ultra/releases/latest \
+              | grep '"tag_name":' | sed -E 's/.*"v?([^"]+)".*/\1/')
+            if [[ -z "$KSU_VERSION_TAG" || "$(printf '%s\n' "$KSU_VERSION_TAG" "3.1.7" | sort -V | head -n1)" != "3.1.7" ]]; then
+              KSU_VERSION_TAG="3.1.7"
+            fi
+            echo "KSU_VERSION_TAG=$KSU_VERSION_TAG" >> $GITHUB_ENV
           fi
-          echo "KSU_VERSION_TAG=$KSU_VERSION_TAG" >> $GITHUB_ENV
 
           GIT_HASH=$(git rev-parse --short HEAD)
           echo "GIT_HASH=$GIT_HASH"
@@ -732,33 +763,40 @@ jobs:
           ESC_VERSION_FULL=$(printf '%s' "$VERSION_FULL" | sed 's/[&|\\/]/\\&/g')
           ESC_KSU_VERSION_TAG=$(printf '%s' "$KSU_VERSION_TAG" | sed 's/[&|\\/]/\\&/g')
 
-          if grep -q '^KSU_VERSION_FULL := ' kernel/Makefile; then
-            sed -i "s|^KSU_VERSION_FULL := .*|KSU_VERSION_FULL := $ESC_VERSION_FULL|" kernel/Makefile
+          if [[ "$KSU_FLAVOR" == "FinaSU" ]]; then
+            # FinaSU 的 kernel/Makefile 不含 KSU_VERSION_FULL/KSU_VERSION_API，跳过注入避免污染构建
+            echo "FinaSU: skip KSU_VERSION_FULL/KSU_VERSION_API injection"
+            KSU_VERSION=$(git rev-list --count HEAD 2>/dev/null || echo 1)
+            echo "KSUVER=$KSU_VERSION" >> $GITHUB_ENV
           else
-            awk -v full="$VERSION_FULL" '
-              /^REPO_OWNER :=/ && !done {
-                print
-                print ""
-                print "KSU_VERSION_FULL := " full
-                done=1
-                next
-              }
-              { print }
-            ' kernel/Makefile > kernel/Makefile.tmp && mv kernel/Makefile.tmp kernel/Makefile
-          fi
+            if grep -q '^KSU_VERSION_FULL := ' kernel/Makefile; then
+              sed -i "s|^KSU_VERSION_FULL := .*|KSU_VERSION_FULL := $ESC_VERSION_FULL|" kernel/Makefile
+            else
+              awk -v full="$VERSION_FULL" '
+                /^REPO_OWNER :=/ && !done {
+                  print
+                  print ""
+                  print "KSU_VERSION_FULL := " full
+                  done=1
+                  next
+                }
+                { print }
+              ' kernel/Makefile > kernel/Makefile.tmp && mv kernel/Makefile.tmp kernel/Makefile
+            fi
 
-          if grep -q '^KSU_VERSION_API := ' kernel/Makefile; then
-            sed -i "s|^KSU_VERSION_API := .*|KSU_VERSION_API := $ESC_KSU_VERSION_TAG|" kernel/Makefile
-          fi
+            if grep -q '^KSU_VERSION_API := ' kernel/Makefile; then
+              sed -i "s|^KSU_VERSION_API := .*|KSU_VERSION_API := $ESC_KSU_VERSION_TAG|" kernel/Makefile
+            fi
 
-          KSU_VERSION=$(expr $(git rev-list --count "$KSU_MANAGER_BRANCH" 2>/dev/null || echo 13000) + 37185)
-          echo "KSUVER=$KSU_VERSION" >> $GITHUB_ENV
+            KSU_VERSION=$(expr $(git rev-list --count "$KSU_MANAGER_BRANCH" 2>/dev/null || echo 13000) + 37185)
+            echo "KSUVER=$KSU_VERSION" >> $GITHUB_ENV
+          fi
 
           echo "::group::最终 Makefile 中版本信息及部分调试结果预览"
           grep -nE '^(REPO_OWNER|REPO_NAME|REPO_BRANCH|KSU_VERSION_API|KSU_VERSION_FULL|VERSION_TAG|GIT_BIN|CURL_BIN)' kernel/Makefile
           echo "::endgroup::"
 
-      - name: Apply Patches SukiSU Ultra
+      - name: Apply Patches ${{ github.event.inputs.KSU_FLAVOR }}
         env:
           FILE: ${{ github.event.inputs.FILE }}
         run: |
@@ -1065,6 +1103,17 @@ jobs:
 
           # SukiSU Ultra配置
           set_config "CONFIG_KSU=y"
+
+          # FinaSU hook 后端：默认 Tracepoint；开启 SUSFS_INLINE 则用 ARM64 Built-In SUSFS Inline
+          if [[ "$KSU_FLAVOR" == "FinaSU" ]]; then
+            if [ "${{ github.event.inputs.SUSFS_INLINE }}" = "true" ]; then
+              set_config "CONFIG_KSU_HOOK_TRACEPOINT=n"
+              set_config "CONFIG_KSU_HOOK_SUSFS_INLINE=y"
+            else
+              set_config "CONFIG_KSU_HOOK_TRACEPOINT=y"
+              set_config "CONFIG_KSU_HOOK_SUSFS_INLINE=n"
+            fi
+          fi
 
           # KPM配置
           if [ "${{ github.event.inputs.KPM }}" = "KPM" ] || [ "${{ github.event.inputs.KPM }}" = "N/A" ]; then
@@ -1531,23 +1580,30 @@ jobs:
           wget -O ksu_module_susfs_1.5.2+_Release.zip https://github.com/sidex15/ksu_module_susfs/releases/latest/download/ksu_module_susfs_1.5.2+.zip
           cp ksu_module_susfs_1.5.2+_Release.zip ./AnyKernel3/
 
-      - name: Download Latest SukiSU-Ultra APK from CI
+      - name: Download Latest ${{ github.event.inputs.KSU_FLAVOR }} APK from CI
         continue-on-error: true
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
-          MANAGER_ARTIFACT=Manager
+          if [[ "$KSU_FLAVOR" == "FinaSU" ]]; then
+            KSU_REPO="LyraVoid/FinaSU"
+            MANAGER_ARTIFACT=manager
+          else
+            KSU_REPO="SukiSU-Ultra/SukiSU-Ultra"
+            MANAGER_ARTIFACT=Manager
+          fi
 
+          echo "Using repo: $KSU_REPO"
           echo "Using branch: $KSU_MANAGER_BRANCH"
           echo "Downloading artifact: $MANAGER_ARTIFACT"
 
-          run_id=$(gh api "repos/SukiSU-Ultra/SukiSU-Ultra/actions/workflows/build-manager.yml/runs?branch=$KSU_MANAGER_BRANCH&status=success&event=push&per_page=1" --jq '.workflow_runs[0].id' || echo "")
+          run_id=$(gh api "repos/$KSU_REPO/actions/workflows/build-manager.yml/runs?branch=$KSU_MANAGER_BRANCH&status=success&per_page=1" --jq '.workflow_runs[0].id' || echo "")
 
           if [[ -z "$run_id" ]]; then
             echo "No successful workflow run found on branch $KSU_MANAGER_BRANCH. Skipping download."
             exit 0
           fi
-          artifact_url=$(gh api "repos/SukiSU-Ultra/SukiSU-Ultra/actions/runs/$run_id/artifacts" | jq -r ".artifacts[] | select(.name == \"$MANAGER_ARTIFACT\") | .archive_download_url" | head -n1)
+          artifact_url=$(gh api "repos/$KSU_REPO/actions/runs/$run_id/artifacts" | jq -r ".artifacts[] | select(.name == \"$MANAGER_ARTIFACT\") | .archive_download_url" | head -n1)
 
           if [[ -z "$artifact_url" ]]; then
             echo "No artifact '$MANAGER_ARTIFACT' found in run $run_id. Skipping download."
@@ -1565,7 +1621,7 @@ jobs:
       - name: Upload AnyKernel3
         uses: actions/upload-artifact@v7
         with:
-          name: AnyKernel3_SukiSUUltra_${{ env.KSUVER }}_${{ steps.extract_info.outputs.value }}(${{ env.CKERNEL_VERSION }})${{ steps.suffix.outputs.value }}
+          name: AnyKernel3_${{ env.KSU_FLAVOR || 'SukiSUUltra' }}_${{ env.KSUVER }}_${{ steps.extract_info.outputs.value }}(${{ env.CKERNEL_VERSION }})${{ steps.suffix.outputs.value }}
           path: ./AnyKernel3/*
 
       - name: Extract and Process ZRAM Module
