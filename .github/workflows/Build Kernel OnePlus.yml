@@ -1566,7 +1566,25 @@ jobs:
             ./kptools-linux -p -i ./Image -k ./kpimg-linux -o ./oImage
           fi
           mv -f oImage Image
-          cp Image "${GITHUB_WORKSPACE}/AnyKernel3/Image"
+
+      # Image 必须无条件拷进 AnyKernel3，否则 KPM=N/A 时第 43 步被跳过，
+      # 产出包里会没有内核本体（run #12 就踩到这一点）
+      - name: Copy Image into AnyKernel3
+        run: |
+          OUT_DIR="${GITHUB_WORKSPACE}/kernel_workspace/kernel_platform/out/Final-Image-Find"
+          SRC=""
+          for c in "${OUT_DIR}/Image" \
+                   "$(find "${GITHUB_WORKSPACE}/kernel_workspace/kernel_platform/out" -name Image 2>/dev/null | head -n1)"; do
+            if [ -n "$c" ] && [ -f "$c" ]; then SRC="$c"; break; fi
+          done
+          if [ -z "$SRC" ]; then
+            echo "❌ 找不到编译出的 Image" >&2
+            exit 1
+          fi
+          echo "Image 来源: $SRC ($(stat -c%s "$SRC") 字节)"
+          mkdir -p "${GITHUB_WORKSPACE}/AnyKernel3"
+          cp "$SRC" "${GITHUB_WORKSPACE}/AnyKernel3/Image"
+          ls -l "${GITHUB_WORKSPACE}/AnyKernel3/Image"
 
       - name: Download Latest SUSFS Module from CI
         if: ${{ github.event.inputs.SUSFS_CI == 'CI' && github.event.inputs.SUSFS_META != '-1' }}
