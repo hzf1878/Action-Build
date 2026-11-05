@@ -728,14 +728,16 @@ jobs:
             # 在一加 /metadata 挂载时序下会导致卡第一屏。编译期彻底移除。
             if [ "${{ github.event.inputs.FINASU_PREINIT }}" != "true" ]; then
               echo "FinaSU: 禁用 preinit (注入 -DKSU_NO_PREINIT)"
-              # 在 preinit.h 顶部定义 KSU_NO_PREINIT，让所有调用点退化为空桩，
-              # 比改 Kbuild 的 ccflags-y 更可靠（不受变量定义顺序影响）
+              # 只定义宏不够：preinit.c 自身仍会编译并定义同名函数，与 preinit.h 中的
+              # static inline 空桩冲突。必须从 Kbuild 移除 preinit 目标文件，
+              # 同时保留 headers 让 preinit.h 走 KSU_NO_PREINIT 分支。
+              sed -i '/^kernelsu-objs += preinit\/preinit\.o$/d' kernel/Kbuild
+              sed -i '/^kernelsu-objs += preinit\/blob\.o$/d' kernel/Kbuild
               sed -i '/#define __KSU_H_PREINIT/a #define KSU_NO_PREINIT 1' kernel/preinit/preinit.h
-              sed -i 's/^static bool ksu_preinit_enabled = true;$/static bool ksu_preinit_enabled = false;/' kernel/preinit/preinit.c
-              echo "  preinit.h 注入结果:"
+              echo "  Kbuild 中残留的 preinit objs (应为空):"
+              grep -n 'kernelsu-objs += preinit' kernel/Kbuild || echo "    (已全部移除)"
+              echo "  preinit.h 宏:"
               grep -n "KSU_NO_PREINIT" kernel/preinit/preinit.h || { echo "  ❌ 注入失败"; exit 1; }
-              echo "  preinit.c 默认值:"
-              grep -n "ksu_preinit_enabled = " kernel/preinit/preinit.c || true
             else
               echo "FinaSU: 保留 preinit"
             fi
