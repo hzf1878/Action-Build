@@ -1550,6 +1550,17 @@ jobs:
           # KPM_DIR="${GITHUB_WORKSPACE}/kernel_workspace/Action-Build/patches/kpm"
           KPN_DIR="${GITHUB_WORKSPACE}/kernel_workspace/Action-Build/patches/kpn"
           OUT_DIR="${GITHUB_WORKSPACE}/kernel_workspace/kernel_platform/out/Final-Image-Find"
+          mkdir -p "${OUT_DIR}"
+          # Image 由上一步统一放进这里；若上一步走了别的路径，从 out 目录再找一次
+          if [ ! -f "${OUT_DIR}/Image" ]; then
+            FOUND=$(find "${GITHUB_WORKSPACE}/kernel_workspace/kernel_platform" -type f -name Image -size +10M 2>/dev/null | head -n1)
+            if [ -z "$FOUND" ]; then
+              echo "❌ 找不到待打补丁的 Image" >&2
+              exit 1
+            fi
+            cp "$FOUND" "${OUT_DIR}/Image"
+            echo "Image 取自: $FOUND"
+          fi
           cd "${OUT_DIR}"
           if [ "${{ github.event.inputs.KPM }}" = "KPM" ]; then
             cp "${KPM_DIR}/patch_linux" "${KPM_DIR}/kpimg" .
