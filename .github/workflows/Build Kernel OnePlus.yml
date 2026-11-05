@@ -1552,9 +1552,14 @@ jobs:
           OUT_DIR="${GITHUB_WORKSPACE}/kernel_workspace/kernel_platform/out/Final-Image-Find"
           cd "${OUT_DIR}"
           if [ "${{ github.event.inputs.KPM }}" = "KPM" ]; then
-            cp "${KPM_DIR}/patch_linux" .
+            cp "${KPM_DIR}/patch_linux" "${KPM_DIR}/kpimg" .
             chmod +x patch_linux
-            ./patch_linux
+            # patch_linux 必须带 COMMAND，裸跑只会打印 Usage 退出、不生成 oImage
+            ./patch_linux -p -i ./Image -k ./kpimg -o ./oImage
+            if [ ! -f oImage ]; then
+              echo "❌ patch_linux 未生成 oImage" >&2
+              exit 1
+            fi
           else
             cp "${KPN_DIR}/kptools-linux" "${KPN_DIR}/kpimg-linux" .
             chmod +x ./kptools-linux
