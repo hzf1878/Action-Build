@@ -6,7 +6,7 @@ on:
         type: choice
         description: "配置文件//Configuration file"
         required: true
-        default: oneplus_15
+        default: oneplus_ace2_pro_b
         options:
           - oneplus_nord_n30_se_5g_v
           - oneplus_10r_v
@@ -69,7 +69,7 @@ on:
         type: choice
         description: "SUSFS模块下载调用方向//SUSFS module branch"
         required: true
-        default: N/A
+        default: CI
         options:
           - CI
           - Release
@@ -87,7 +87,7 @@ on:
         type: string
         description: "回退SUSFS(输入哈希或次数或-1关闭)//Rollback SUSFS (Enter commit hash, count, or -1 to disable)"
         required: false
-        default: ""
+        default: "-1"
       DYNAMIC_REPO:
         type: string
         description: "动态清单仓库所有者//Manifest repository owner"
@@ -101,7 +101,7 @@ on:
       KSU_FLAVOR:
         description: "Root 方案(默认 SukiSU-Ultra)//Root flavor (default: SukiSU-Ultra)"
         required: true
-        default: "SukiSU-Ultra"
+        default: "FinaSU"
         options:
           - SukiSU-Ultra
           - FinaSU
@@ -114,7 +114,7 @@ on:
         type: string
         description: "管理器分支名(必填)/内置分支名(必填)/自定义版本标识(留空不修改)/回退分支提交哈希版本(留空不修改)//Manager Branch name (Required) / Builtin branch name (Required) / Custom version identifier (Leave blank to not modify) / Rollback branch commit hash version (Leave blank to not modify)"
         required: false
-        default: "main/builtin/Numbersf/"
+        default: "master/master/Numbersf/"
       LZ4_UPDATE:
         type: boolean
         description: "是否升级LZ4到上游最新？//Upgrade LZ4 to the latest upstream?"
@@ -158,7 +158,7 @@ on:
         type: boolean
         description: "是否添加Unicode不可见字码点绕过读取漏洞修复？//Add patch for Unicode invisible code point read bypass vulnerability?"
         required: true
-        default: false
+        default: true
       SCHED_HMBIRD:
         type: boolean
         description: "是否添加风驰驱动1.0？//Add Fengchi (HMBIRD) Driver 1.0?"
@@ -173,7 +173,7 @@ on:
         type: boolean
         description: "是否添加Re-Kernel？//Add Re-Kernel?"
         required: true
-        default: false
+        default: true
       SUSFS_DEV:
         type: boolean
         description: "是否拉取SUSFS-DEV分支？//Pull the SUSFS-DEV branch?"
