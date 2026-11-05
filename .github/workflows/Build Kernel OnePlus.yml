@@ -110,6 +110,11 @@ on:
         description: "仅 FinaSU 生效：使用 ARM64 Built-In SUSFS Inline 后端代替 Tracepoint //FinaSU only: use ARM64 Built-In SUSFS Inline instead of Tracepoint"
         required: false
         default: false
+      FINASU_PREINIT:
+        type: boolean
+        description: "仅 FinaSU 生效：保留 preinit（会增加卡第一屏风险，默认关闭）//FinaSU only: keep preinit (higher risk of logo hang, off by default)"
+        required: false
+        default: false
       KSU_META:
         type: string
         description: "管理器分支名(必填)/内置分支名(必填)/自定义版本标识(留空不修改)/回退分支提交哈希版本(留空不修改)//Manager Branch name (Required) / Builtin branch name (Required) / Custom version identifier (Leave blank to not modify) / Rollback branch commit hash version (Leave blank to not modify)"
@@ -718,6 +723,22 @@ jobs:
             curl -LSsf "https://raw.githubusercontent.com/LyraVoid/FinaSU/${KSU_MANAGER_BRANCH}/kernel/setup.sh" -o finasu_setup.sh
             bash finasu_setup.sh "$KSU_BUILTIN_BRANCH"
             cd ./FinaSU
+
+            # FinaSU 的 preinit 会在 execve(/system/bin/init) 时替换 PID 1，
+            # 在一加 /metadata 挂载时序下会导致卡第一屏。编译期彻底移除。
+            if [ "${{ github.event.inputs.FINASU_PREINIT }}" != "true" ]; then
+              echo "FinaSU: 禁用 preinit (注入 -DKSU_NO_PREINIT)"
+              # 在 preinit.h 顶部定义 KSU_NO_PREINIT，让所有调用点退化为空桩，
+              # 比改 Kbuild 的 ccflags-y 更可靠（不受变量定义顺序影响）
+              sed -i '/#define __KSU_H_PREINIT/a #define KSU_NO_PREINIT 1' kernel/preinit/preinit.h
+              sed -i 's/^static bool ksu_preinit_enabled = true;$/static bool ksu_preinit_enabled = false;/' kernel/preinit/preinit.c
+              echo "  preinit.h 注入结果:"
+              grep -n "KSU_NO_PREINIT" kernel/preinit/preinit.h || { echo "  ❌ 注入失败"; exit 1; }
+              echo "  preinit.c 默认值:"
+              grep -n "ksu_preinit_enabled = " kernel/preinit/preinit.c || true
+            else
+              echo "FinaSU: 保留 preinit"
+            fi
           else
             curl -LSs "https://raw.githubusercontent.com/SukiSU-Ultra/SukiSU-Ultra/${KSU_MANAGER_BRANCH}/kernel/setup.sh" | bash -s "$KSU_BUILTIN_BRANCH"
             cd ./KernelSU
@@ -1510,28 +1531,14 @@ jobs:
         run: |
           git clone https://github.com/Numbersf/AnyKernel3 --depth=1
           rm -rf ./AnyKernel3/.git
-          mkdir -p kernel_workspace/kernel_platform/out/Final-Image-Find/
-          image_path=""
-          if [ -d "./kernel_workspace/kernel_platform/common/out/" ]; then
-            image_path=$(find "./kernel_workspace/kernel_platform/common/out/" -name "Image" | head -n 1)
-            if [ -n "$image_path" ]; then
-              echo "✅ 使用 make 编译的统一路径，成功找到 Image 文件"
-            fi
-          fi
-          if [ -z "$image_path" ] && [ -d "./kernel_workspace/kernel_platform/out/" ]; then
-            image_path=$(find "./kernel_workspace/kernel_platform/out/" -name "Image" | head -n 1)
-            if [ -n "$image_path" ]; then
-              echo "✅ 使用官方脚本编译，成功找到 Image 文件"
-            fi
-          fi
-          if [ -z "$image_path" ]; then
-            echo "❌ 未找到 Image 文件，构建失败" >&2
-            exit 1
-          fi
-          if [ -f "$image_path" ]; then
-            echo "✅ Image file finally located at: $image_path"
-            cp "$image_path" ./AnyKernel3/Image
-            cp "$image_path" kernel_workspace/kernel_platform/out/Final-Image-Find/Image
+
+          # FinaSU 运行时保险：在 boot cmdline 注入 kernelsu.preinit=0，
+          # 即使编译期注入失效也能阻止 preinit 替换 PID 1 导致卡第一屏
+          if [[ "$KSU_FLAVOR" == "FinaSU" && "${{ github.event.inputs.FINASU_PREINIT }}" != "true" ]]; then
+            echo "为 FinaSU 注入 cmdline: kernelsu.preinit=0"
+            python3 "${GITHUB_WORKSPACE}/kernel_workspace/Action-Build/scripts/finasu_patch_cmdline.py" ./AnyKernel3/anykernel.sh
+          else
+            echo "跳过 cmdline 注入 (flavor=${KSU_FLAVOR:-unset})"
           fi
 
       - name: Apply KPX and Replace Image
