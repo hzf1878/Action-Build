@@ -1562,20 +1562,44 @@ jobs:
             echo "Image 取自: $FOUND"
           fi
           cd "${OUT_DIR}"
+          ORIG_SIZE=$(stat -c%s Image)
+          # 清掉可能残留的旧 oImage，否则 patch 失败时存在性检查会误判成成功
+          rm -f oImage
           if [ "${{ github.event.inputs.KPM }}" = "KPM" ]; then
             cp "${KPM_DIR}/patch_linux" "${KPM_DIR}/kpimg" .
             chmod +x patch_linux
+            echo "kpimg: $(stat -c%s kpimg) 字节"
             # patch_linux 必须带 COMMAND，裸跑只会打印 Usage 退出、不生成 oImage
             ./patch_linux -p -i ./Image -k ./kpimg -o ./oImage
-            if [ ! -f oImage ]; then
-              echo "❌ patch_linux 未生成 oImage" >&2
-              exit 1
-            fi
+            RC=$?
+            echo "patch_linux 退出码: $RC"
           else
             cp "${KPN_DIR}/kptools-linux" "${KPN_DIR}/kpimg-linux" .
             chmod +x ./kptools-linux
             ./kptools-linux -p -i ./Image -k ./kpimg-linux -o ./oImage
+            RC=$?
+            echo "kptools-linux 退出码: $RC"
           fi
+          if [ "$RC" != "0" ]; then
+            echo "❌ 打补丁工具返回非零 ($RC)" >&2
+            exit 1
+          fi
+          if [ ! -f oImage ]; then
+            echo "❌ 未生成 oImage" >&2
+            exit 1
+          fi
+          NEW_SIZE=$(stat -c%s oImage)
+          echo "补丁前后: ${ORIG_SIZE} -> ${NEW_SIZE} 字节 (增加 $((NEW_SIZE - ORIG_SIZE)))"
+          if [ "$NEW_SIZE" -le "$ORIG_SIZE" ]; then
+            echo "❌ oImage 没有变大，补丁疑似未生效" >&2
+            exit 1
+          fi
+          # 关键校验：确认 KernelPatch 真的写进去了
+          if ! grep -aq "KernelPatch Version" oImage; then
+            echo "❌ oImage 中找不到 KernelPatch 特征，补丁未生效" >&2
+            exit 1
+          fi
+          echo "✅ KernelPatch 特征校验通过"
           mv -f oImage Image
 
       # Image 必须无条件拷进 AnyKernel3：原先只在 'Apply KPX and Replace Image'
